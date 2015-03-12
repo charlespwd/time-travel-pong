@@ -1,8 +1,86 @@
 (ns tt-pong.core
-  (:require [clojure.browser.repl :as repl]))
+  (:refer-clojure :exclude [update])
+  (:require [clojure.browser.repl :as repl]
+            [goog.dom :as dom]))
 
-;; (repl/connect "http://localhost:9000/repl")
+(def ^:dynamic *world* {:width 600, :height 400, :color "#333"})
 
-(enable-console-print!)
+(defn log [s]
+  (.log js/console s))
 
-(println "Hello world!")
+(defn drawRect [context color x y width height]
+  (do (set! (.-fillStyle context) color)
+      (.fillRect context x y width height)))
+
+(defn getContext [id]
+  (.getContext (dom/getElement id) "2d"))
+
+(defn animate [f]
+  (.requestAnimationFrame js/window f))
+
+(defn out-of-bounds? [x k]
+  (or (> x (k *world*)) (< x 0)))
+
+(defprotocol Thing
+  (draw [this context])
+  (update [this dt]))
+
+(defrecord World [width height color]
+  Thing
+  (draw [this context]
+    (do (drawRect context color 0 0 (:width this) (:height this))
+        this))
+  (update [this dt] this))
+
+(defrecord Ball [width height x y vx vy]
+  Thing
+  (draw [this context]
+    (do (drawRect context "#fff" x y width height)
+        this))
+  (update [this dt]
+    (let [new-x (+ x (* vx (/ dt 1000.0)))
+          new-y (+ y (* vy (/ dt 1000.0)))
+          new-vx (if (out-of-bounds? new-x :width) (- vx) vx)
+          new-vy (if (out-of-bounds? new-y :height) (- vy) vy)]
+      (-> this
+          (assoc :x new-x)
+          (assoc :y new-y)
+          (assoc :vx new-vx)
+          (assoc :vy new-vy)))))
+
+(defrecord Player [width height x y direction]
+  Thing
+  (draw [this context]
+    (do (drawRect context "#fff" x y width height)
+        this))
+  (update [this dt]
+    (-> this
+        (assoc :y (+ y (* direction 5))))))
+
+(defrecord Game [things]
+  Thing
+  (draw [this context]
+    (assoc this :things (doall (map #(draw % context) things))))
+  (update [this dt]
+    (assoc this :things (doall (map #(update % dt) things)))))
+
+(defn animate-loop [game context old-timestamp timestamp]
+  (let [t1 (or old-timestamp timestamp)
+        dt (- timestamp t1)
+        updated-game (update game dt)]
+    (do (draw updated-game context)
+        (animate (partial animate-loop updated-game context timestamp)))))
+
+(defn setup []
+  (let [context (getContext "game")
+        world (map->World *world*)
+        ball (->Ball 20 20 290 190 50 50)
+        player1 (->Player 20 80 10 150 0)
+        player2 (->Player 20 80 570 150 0)
+        game (->Game [world ball player1 player2])]
+    (do (draw game context)
+        (js/setTimeout
+          #(animate (partial animate-loop game context nil))
+          1000))))
+
+(set! (.-onload js/window) setup)

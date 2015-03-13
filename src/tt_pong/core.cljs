@@ -4,6 +4,7 @@
             [goog.dom :as dom]))
 
 (def ^:dynamic *world* {:width 600, :height 400, :color "#333"})
+(def game (atom {}))
 
 (defn log [s]
   (.log js/console s))
@@ -26,17 +27,14 @@
 
 (defprotocol Thing
   (draw [this context])
-  (update [this dt])
-  (center [this]))
+  (update [this dt]))
 
 (defrecord World [width height color]
   Thing
   (draw [this context]
     (do (drawRect context color 0 0 width height)
         this))
-  (update [this dt] this)
-  (center [this]
-    ([(/ width 2) (/ height 2)])))
+  (update [this dt] this))
 
 (defrecord Ball [width height x y vx vy]
   Thing
@@ -52,11 +50,7 @@
           (assoc :x new-x)
           (assoc :y new-y)
           (assoc :vx new-vx)
-          (assoc :vy new-vy))))
-  (center [this]
-    [(+ x (/ width 2))
-     (+ y (/ height 2))])
-  )
+          (assoc :vy new-vy)))))
 
 (defrecord Player [width height x y direction]
   Thing
@@ -65,44 +59,44 @@
         this))
   (update [this dt]
     (-> this
-        (assoc :y (+ y (* direction 5)))))
-  (center [this]
-    [(+ x (/ width 2))
-     (+ y (/ height 2))]))
+        (assoc :y (+ y (* direction 5))))))
 
 (defprotocol Lifecycled
-  (start [this context])
+  (start [this])
   (stop [this]))
 
-(defn animation [game context old-timestamp timestamp]
-  (let [t1 (or old-timestamp timestamp)
-        dt (- timestamp t1)
-        updated-game (update game dt)]
-    (do (draw updated-game context)
-        (start-animation (partial animation updated-game context timestamp)))))
+(defprotocol Animated
+  (animate [this t1 t2]))
 
-(defrecord Game [things]
+(defrecord Game [things context]
   Thing
-  (draw [this context]
-    (assoc this :things (doall (map #(draw % context) things))))
+  (draw [this ctx]
+    (assoc this :things (doall (map #(draw % ctx) things))))
   (update [this dt]
     (assoc this :things (doall (map #(update % dt) things))))
+  Animated
+  (animate [this old-t timestamp]
+    (let [t1 (or old-t timestamp)
+          dt (- timestamp t1)
+          updated-game (update this dt)]
+      (do (draw updated-game context)
+          (assoc this :rafid
+                 (start-animation
+                   (partial animate updated-game timestamp))))))
   Lifecycled
-  (start [this context]
+  (start [this]
     (do (draw this context)
-        (assoc this :rafid
-               (start-animation (partial animation this context nil)))))
-  (stop [this]
-    (do (stop-animation (:rafid this))
-        this)))
+        (start-animation (partial animate this nil))))
+  (stop [this] nil)) ;; TODO
 
 (defn setup []
   (let [context (getContext "game")
         world (map->World *world*)
-        ball (->Ball 20 20 290 190 50 50)
+        ball (->Ball 20 20 290 190 80 80)
         player1 (->Player 20 80 10 150 0)
-        player2 (->Player 20 80 570 150 0)
-        game (->Game [world ball player1 player2])]
-    (js/setTimeout #(start game context) 1000)))
+        player2 (->Player 20 80 570 150 0)]
+    (do (reset! game (->Game [world ball player1 player2] context))
+        (js/setTimeout #(start @game) 1000))))
 
 (set! (.-onload js/window) setup)
+

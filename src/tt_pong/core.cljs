@@ -40,6 +40,14 @@
 (defn stop-animation [rafid]
   (.cancelAnimationFrame js/window rafid))
 
+(defn speed [v]
+  (let [theta (rand (* 2 (.-PI js/Math)))]
+    [(* v (.cos js/Math theta))
+     (* v (.sin js/Math theta))]))
+
+(defn vel [{:keys [vx vy]}]
+  (.sqrt js/Math (+ (* vx vx) (* vy vy))))
+
 (defprotocol Thing
   (draw [this context])
   (update [this dt])
@@ -83,9 +91,6 @@
     [(+ x (/ width 2))
      (+ y (/ height 2))
      this]))
-
-(defn vel [{:keys [vx vy]}]
-  (.sqrt js/Math (+ (* vx vx) (* vy vy))))
 
 (defn bounce-y [[bx by ball] dir]
   (-> ball
@@ -135,7 +140,8 @@
 
 (defn update-app-state [game]
   (do (swap! app-history conj game)
-      (reset! app-state game)))
+      (reset! app-state game)
+      game))
 
 (defn score? [{[_ ball] :things}]
   (let [[bx] (center ball)]
@@ -163,28 +169,34 @@
     (reset! app-state (last @app-history))
     @app-state))
 
-(defn animate-fwd [game old-t timestamp]
-  (let [t1 (or old-t timestamp)
-        dt (- timestamp t1)
-        updated-game (update game dt)]
-    (do (draw updated-game nil)
-        (update-app-state updated-game)
-        (if-not (score? updated-game)
-          (update-rafid (start-animation
-           (partial animate-fwd updated-game timestamp)))
-          (do (update-score updated-game)
-              (reset))))))
+(defn draw-and-update-with [game update-fn dt]
+  (do (draw game nil)
+      (update-fn game dt)))
 
-(defn animate-bwd [game old-t timestamp]
-  (let [t1 (or old-t timestamp)
-        dt (- timestamp t1)
-        updated-game (undo)]
-    (if-not (empty? updated-game)
-      (do (draw updated-game nil)
-          (update-rafid (start-animation
-                          (partial animate-bwd updated-game timestamp))))
-      (update-rafid (start-animation
-                      (partial animate-fwd game timestamp))))))
+(defn request-animation-frame [f & args]
+  (update-rafid (start-animation (apply partial f args))))
+
+(defn score! [game]
+  (do (update-score game) (reset)))
+
+(defn update! [game dt]
+  (update-app-state (update game dt)))
+
+(defn play [game t1 t2]
+  (let [dt (- t2 (or t1 t2))]
+    (-> game
+        (draw-and-update-with update! dt)
+        (#(if-not (score? %)
+            (request-animation-frame play % t2)
+            (do (score! %)))))))
+
+(defn rewind [game t1 t2]
+  (let [dt (- t2 (or t1 t2))]
+    (-> game
+        (draw-and-update-with undo dt)
+        (#(if-not (empty? %)
+            (request-animation-frame rewind % t2)
+            (request-animation-frame play game t2))))))
 
 (defn stop []
   (stop-animation (:rafid @animation-frame)))
@@ -192,17 +204,12 @@
 (defn start []
   (do (stop)
       (draw @app-state nil)
-      (start-animation (partial animate-fwd @app-state nil))))
+      (start-animation (partial play @app-state nil))))
 
-(defn rewind []
+(defn rewind! []
   (do (stop)
       (draw @app-state nil)
-      (start-animation (partial animate-bwd @app-state nil))))
-
-(defn speed [v]
-  (let [theta (rand (* 2 (.-PI js/Math)))]
-    [(* v (.cos js/Math theta))
-     (* v (.sin js/Math theta))]))
+      (start-animation (partial rewind @app-state nil))))
 
 (defn setup []
   (let [context (get-context "game")
@@ -217,7 +224,7 @@
 (set! (.-onload js/window) setup)
 
 ;; (js/setTimeout #(stop) 3000)
-;; (js/setTimeout #(rewind) 4000)
+(js/setTimeout #(rewind!) 4000)
 ;; (js/setTimeout #(start) 5000)
 ;; (js/setTimeout #(reset) 4000)
 ;; (js/setTimeout #(log @app-history) 7000)

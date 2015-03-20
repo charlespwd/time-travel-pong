@@ -19,8 +19,9 @@
 
 (def game-state (atom {}))
 (def game-history (atom [@game-state]))
-(def app-state (atom {:score [0 0] :rafid nil :key-pressed {}}))
-(def key-state (atom {}))
+(def app-state (atom {:score [0 0] :rafid nil :keys-pressed {}}))
+(defn key-is-pressed? [k]
+  (get-in @app-state [:keys-pressed k]))
 
 (defn restart []
   (do (reset! game-state {})
@@ -60,11 +61,14 @@
 
 ;;; Keyboard Controls
 
+(defn keycode->keypress [keycode]
+  (get controls keycode nil))
+
 (defn set-key-state-to! [bool]
   (fn [e]
-    (when-let [keypressed (get controls (.-keyCode e) nil)]
+    (when-let [key (keycode->keypress (.-keyCode e))]
       (.preventDefault e)
-      (swap! key-state assoc keypressed bool))))
+      (swap! app-state assoc-in [:keys-pressed key] bool))))
 
 (events/listen
   (dom/getWindow) "keydown"
@@ -195,8 +199,8 @@
   (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
     (-> this
-        (#(cond (:up @key-state)   (move % :up move-dy-player)
-                (:down @key-state) (move % :down move-dy-player)
+        (#(cond (key-is-pressed? :up)   (move % :up move-dy-player)
+                (key-is-pressed? :down) (move % :down move-dy-player)
                 :default (assoc % :py (:y %))))))
   (center [this] (abstract-center this)))
 
@@ -292,7 +296,7 @@
 ;;; Animations
 
 (defn is-asking-for-rewind? []
-  (:space @key-state))
+  (key-is-pressed? :space))
 
 (defn play! [game t1 t2]
   (let [dt (- t2 (or t1 t2))]

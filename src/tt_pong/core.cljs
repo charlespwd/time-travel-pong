@@ -78,7 +78,7 @@
   (dom/getWindow) "keyup"
   (set-key-state-to! false))
 
-;;; Protocol and Record definitions
+;;; Protocols and Records definitions
 
 (defprotocol Thing
   (draw [this context ratio])
@@ -165,9 +165,7 @@
     (do (draw-rect context "#fff" x y width height) thing)))
 
 (defn abstract-center [{:keys [x y width height] :as this}]
-  [(+ x (/ width 2))
-   (+ y (/ height 2))
-   this])
+  (map (fn [[a b]] (+ a (/ b 2))) [[x width] [y height]]))
 
 ;;; Protocol implementations
 
@@ -178,8 +176,7 @@
         this))
   (update [this dt] this)
   (center [{:keys [width height] :as this}]
-    [(/ width 2)
-     (/ height 2)]))
+    (map #(/ % 2) [width height])))
 
 (extend-type Ball
   Thing
@@ -234,10 +231,8 @@
     (let [score (:score @app-state)
           text (str (first score) " - " (second score))]
       (do (draw-text context color font text x y) this)))
-  (update [this _]
-    this)
-  (center [this]
-    [x y]))
+  (update [this _] this)
+  (center [this] [x y]))
 
 ;;; Game flow helpers
 

@@ -55,7 +55,7 @@
 ;;; Keyboard Controls
 
 (def controls {32 :space, 38 :up, 40 :down, 87 :w, 83 :d})
-(def nudge 5) ;; by how many pixels does the player move when pressing a key?
+(def nudge 10) ;; by how many pixels does the player move when pressing a key?
 (def key-state (atom {}))
 
 (defn set-key-state-to! [bool]
@@ -75,14 +75,14 @@
 ;;; Protocol and Record definitions
 
 (defprotocol Thing
-  (draw [this context])
+  (draw [this context ratio])
   (update [this dt])
   (center [this]))
 
 (defrecord World    [width height color])
-(defrecord Ball     [width height x y vx vy])
-(defrecord Player   [width height x y])
-(defrecord AIPlayer [width height x y])
+(defrecord Ball     [width height x y vx vy px py])
+(defrecord Player   [width height x y px py])
+(defrecord AIPlayer [width height x y px py])
 
 ;;; Ball Logic
 
@@ -100,6 +100,7 @@
    (let [dir (direction {:up -1, :down 1})]
      (-> ball
          (assoc :vy (* dir (abs vy)))
+         (assoc :py y)
          (assoc :y (+ y dir)))))
 
   ;; 3 arity for bouncing on a player
@@ -116,6 +117,7 @@
        (-> ball
            (assoc :vx (* dir ballvx))
            (assoc :vy ballvy)
+           (assoc :px x)
            (assoc :x (+ x dir)))
        ball))))
 
@@ -141,13 +143,20 @@
         [_ yc] (center player)
         [new-y new-yc] (map #(f % nudge) [y yc])]
     (if (< 0 new-yc (:height *world*))
-      (assoc player :y new-y)
+      (-> player
+          (assoc :py y)
+          (assoc :y new-y))
       player)))
 
 ;;; Abstract implementations
 
-(defn abstract-draw [{:keys [width height x y] :as thing} context]
-  (do (draw-rect context "#fff" x y width height) thing))
+(defn abstract-draw [{:keys [width height x y px py] :as thing} context ratio]
+  (if (and px ratio)
+    ;; interpolate the location
+    (let [ix (+ (* ratio x) (* (- 1 ratio) px))
+          iy (+ (* ratio y) (* (- 1 ratio) py))]
+      (do (draw-rect context "#fff" ix iy width height) thing))
+    (do (draw-rect context "#fff" x y width height) thing)))
 
 (defn abstract-center [{:keys [x y width height] :as this}]
   [(+ x (/ width 2))
@@ -158,7 +167,7 @@
 
 (extend-type World
   Thing
-  (draw [{:keys [width height color] :as this} context]
+  (draw [{:keys [width height color] :as this} context _]
     (do (draw-rect context color 0 0 width height)
         this))
   (update [this dt] this)
@@ -168,39 +177,41 @@
 
 (extend-type Ball
   Thing
-  (draw [this context] (abstract-draw this context))
+  (draw [this context ratio] (abstract-draw this context ratio))
   (update [{:keys [x y vx vy] :as this} dt]
     (let [new-x (+ x (* vx (/ dt 1000.0)))
           new-y (+ y (* vy (/ dt 1000.0)))]
       (-> this
+          (assoc :px x)
+          (assoc :py y)
           (assoc :x new-x)
           (assoc :y new-y))))
   (center [this] (abstract-center this)))
 
 (extend-type Player
   Thing
-  (draw [this context] (abstract-draw this context))
+  (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
     (-> this
         (#(cond (:up @key-state)   (move % :up)
                 (:down @key-state) (move % :down)
-                :default %))))
+                :default (assoc % :py (:y %))))))
   (center [this] (abstract-center this)))
 
 (extend-type AIPlayer
   Thing
-  (draw [this context] (abstract-draw this context))
+  (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
     (-> this
         (#(cond (:w @key-state) (move % :up)
                 (:d @key-state) (move % :down)
-                :default %))))
+                :default (assoc % :py (:y %))))))
   (center [this] (abstract-center this)))
 
 (defrecord Game [things context]
   Thing
-  (draw [this _]
-    (assoc this :things (into [] (doall (map #(draw % context) things)))))
+  (draw [this _ ratio]
+    (assoc this :things (into [] (doall (map #(draw % context ratio) things)))))
   (update [this dt]
     (-> this
         (assoc-in [:things 1] (update-ball things))
@@ -209,7 +220,7 @@
 
 (defrecord Score [x y color font]
   Thing
-  (draw [this context]
+  (draw [this context _]
     (let [text (str (first @score) " - " (second @score))]
       (do (draw-text context color font text x y) this)))
   (update [this _]
@@ -219,9 +230,30 @@
 
 ;;; Game flow helpers
 
-(defn draw-and-update-with [game update-fn dt]
-  (do (draw game nil)
-      (update-fn game dt)))
+;; This here is a bit heavy. Please take a look into time accumulators
+;; to understand what's going on. In short, we want to draw on
+;; requestAnimationFrame but we want the simulation to be constant
+;; regardless of whether your computer is fast or not. You do this by
+;; simulating as many time as you should have before drawing. But if
+;; you stop there, you get a very jittery animation, so you must
+;; interpolate the location of the object between two locations when
+;; drawing. This is why we store both x and px, y and py.
+;;
+;; For more info, check
+;; http://kirbysayshi.com/2013/09/24/interpolated-physics-rendering.html
+
+(defn simulate-with [game update-fn dt]
+  (let [target-dt 16.66666666]
+    (loop [simulation (update-fn game dt)
+           accumulator dt]
+      (if (< accumulator target-dt)
+        [simulation (/ accumulator target-dt)]
+        (recur (update-fn simulation target-dt) (- accumulator target-dt))))))
+
+(defn simulate-and-draw-with [game update-fn dt]
+  (-> game
+      (simulate-with update-fn dt)
+      (#(draw (first %) nil (second %)))))
 
 (defn score? [{[_ ball] :things}]
   (let [[bx] (center ball)]
@@ -252,32 +284,39 @@
 
 ;;; Animations
 
+(defn is-asking-for-rewind? []
+  (:space @key-state))
+
 (defn play! [game t1 t2]
   (let [dt (- t2 (or t1 t2))]
-    (-> game
-        (draw-and-update-with update! dt)
-        (#(if-not (score? %)
-            (request-animation-frame! play! % t2)
-            (do (score! %)))))))
+    (if-not (is-asking-for-rewind?)
+      (-> game
+          (simulate-and-draw-with update! dt)
+          (#(if-not (score? %)
+              (request-animation-frame! play! % t2)
+              (do (score! %)))))
+      (request-animation-frame! rewind! game t2))))
 
 (defn rewind! [game t1 t2]
   (let [dt (- t2 (or t1 t2))]
-    (-> game
-        (draw-and-update-with undo! dt)
-        (#(if-not (empty? %)
-            (request-animation-frame! rewind! % t2)
-            (request-animation-frame! play! game t2))))))
+    (if (is-asking-for-rewind?)
+      (-> game
+          (simulate-and-draw-with undo! dt)
+          (#(if-not (empty? %)
+              (request-animation-frame! rewind! % t2)
+              (request-animation-frame! play! game t2))))
+      (request-animation-frame! play! game t2))))
 
 ;;; Game Control
 
 (defn start []
   (do (stop)
-      (draw @app-state nil)
+      (draw @app-state nil 0)
       (start-animation (partial play! @app-state nil))))
 
 (defn rewind []
   (do (stop)
-      (draw @app-state nil)
+      (draw @app-state nil 0)
       (start-animation (partial rewind! @app-state nil))))
 
 (defn stop []
@@ -294,16 +333,19 @@
 
         ball (map->Ball {:width  ball-size
                          :height ball-size
-                         :x 290, :y 190
+                         :x  290, :y  190
+                         :px 290, :py 190
                          :vx vx, :vy vy})
 
         player1 (map->AIPlayer {:width  player-width
                                 :height player-height
-                                :x 10, :y yoffset})
+                                :x  10, :y  yoffset
+                                :px 10, :py yoffset})
 
         player2 (map->Player {:width  player-width
                               :height player-height
-                              :x 570, :y yoffset})
+                              :x  570, :y  yoffset
+                              :px 570, :py yoffset})
 
         gamescore (->Score (- 300 60) 50 "#fff" "40px Courier")]
     (do (reset! app-state (->Game [world ball player1 player2 gamescore] context))
@@ -312,7 +354,7 @@
 (set! (.-onload js/window) setup)
 
 ;; #_(timeout #(stop) 3000)
-;; #_(timeout #(rewind) 5000)
+;; (timeout #(rewind) 5000)
 ;; #_(timeout #(start) 6000)
 ;; #_(timeout #(restart) 4000)
 ;; #_(timeout #(start) 10000)

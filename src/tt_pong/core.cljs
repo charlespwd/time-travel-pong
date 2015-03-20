@@ -277,9 +277,10 @@
   (update-app-state! (update game dt)))
 
 (defn undo! [game dt]
-  (when (> (count @app-history) 1)
-    (swap! app-history pop)
-    (reset! app-state (last @app-history))
+  (if (> (count @app-history) 2)
+    (do (swap! app-history pop)
+        (reset! app-state (last @app-history))
+        @app-state)
     @app-state))
 
 ;;; Animations
@@ -294,18 +295,10 @@
           (simulate-and-draw-with update! dt)
           (#(if-not (score? %)
               (request-animation-frame! play! % t2)
-              (do (score! %)))))
-      (request-animation-frame! rewind! game t2))))
-
-(defn rewind! [game t1 t2]
-  (let [dt (- t2 (or t1 t2))]
-    (if (is-asking-for-rewind?)
+              (score! %))))
       (-> game
           (simulate-and-draw-with undo! dt)
-          (#(if-not (empty? %)
-              (request-animation-frame! rewind! % t2)
-              (request-animation-frame! play! game t2))))
-      (request-animation-frame! play! game t2))))
+          (#(request-animation-frame! play! % t2))))))
 
 ;;; Game Control
 
@@ -313,11 +306,6 @@
   (do (stop)
       (draw @app-state nil 0)
       (start-animation (partial play! @app-state nil))))
-
-(defn rewind []
-  (do (stop)
-      (draw @app-state nil 0)
-      (start-animation (partial rewind! @app-state nil))))
 
 (defn stop []
   (stop-animation (:rafid @animation-frame)))
@@ -354,7 +342,6 @@
 (set! (.-onload js/window) setup)
 
 ;; #_(timeout #(stop) 3000)
-;; (timeout #(rewind) 5000)
 ;; #_(timeout #(start) 6000)
 ;; #_(timeout #(restart) 4000)
 ;; #_(timeout #(start) 10000)

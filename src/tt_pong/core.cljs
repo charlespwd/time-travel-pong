@@ -52,7 +52,7 @@
 (defn request-animation-frame! [f & args]
   (update-rafid! (start-animation (apply partial f args))))
 
-;;; Keyboarder
+;;; Keyboard Controls
 
 (def controls {32 :space, 38 :up, 40 :down, 87 :w, 83 :d})
 (def nudge 5) ;; by how many pixels does the player move when pressing a key?
@@ -60,9 +60,9 @@
 
 (defn set-key-state-to! [bool]
   (fn [e]
-    (do (.preventDefault e)
-        (log (.-keyCode e))
-        (swap! key-state assoc (get controls (.-keyCode e) nil) bool))))
+    (when-let [keypressed (get controls (.-keyCode e) nil)]
+      (.preventDefault e)
+      (swap! key-state assoc keypressed bool))))
 
 (events/listen
   (dom/getWindow) "keydown"
@@ -72,7 +72,19 @@
   (dom/getWindow) "keyup"
   (set-key-state-to! false))
 
-;;; Ball logic
+;;; Protocol and Record definitions
+
+(defprotocol Thing
+  (draw [this context])
+  (update [this dt])
+  (center [this]))
+
+(defrecord World    [width height color])
+(defrecord Ball     [width height x y vx vy])
+(defrecord Player   [width height x y])
+(defrecord AIPlayer [width height x y])
+
+;;; Ball Logic
 
 (defn random-velocity [speed]
   (let [theta (rand (* 2 pi))]
@@ -82,32 +94,30 @@
 (defn speed [{:keys [vx vy]}]
   (sqrt (+ (* vx vx) (* vy vy))))
 
-(defprotocol Thing
-  (draw [this context])
-  (update [this dt])
-  (center [this]))
+(defn bounce
+  ;; 2 arity for bouncing on the world boundary
+  ([{:keys [vy y] :as ball} direction]
+   (let [dir (direction {:up -1, :down 1})]
+     (-> ball
+         (assoc :vy (* dir (abs vy)))
+         (assoc :y (+ y dir)))))
 
-(defn bounce-y [{:keys [vy y] :as ball} direction]
-  (let [dir (direction {:up 1, :down -1})]
-    (-> ball
-      (assoc :vy (* dir (abs vy)))
-      (assoc :y (+ y dir)))))
-
-(defn bounce-x [{:keys [x] :as ball} player direction]
-  (let [[bx by] (center ball)
-        [px py] (center player)
-        relative-y (/ (- by py) (/ player-height 2))
-        theta (* relative-y max-bounce-angle)
-        velocity (speed ball)
-        ballvx (* velocity (cos theta))
-        ballvy (* velocity (sin theta))
-        dir (direction {:left -1, :right 1})]
-    (if (< -1 relative-y 1) ; is it hitting the player?
-      (-> ball
-        (assoc :vx (* dir ballvx))
-        (assoc :vy ballvy)
-        (assoc :x (+ x dir)))
-      ball)))
+  ;; 3 arity for bouncing on a player
+  ([{:keys [x] :as ball} direction player]
+   (let [[bx by] (center ball)
+         [px py] (center player)
+         spd (speed ball)
+         relative-y (/ (- by py) (/ player-height 2))
+         theta  (* relative-y max-bounce-angle)
+         ballvx (* spd (cos theta))
+         ballvy (* spd (sin theta))
+         dir (direction {:left -1, :right 1})]
+     (if (< -1 relative-y 1) ; is it hitting the player?
+       (-> ball
+           (assoc :vx (* dir ballvx))
+           (assoc :vy ballvy)
+           (assoc :x (+ x dir)))
+       ball))))
 
 (defn update-ball [[world ball p1 p2 :as things]]
   (let [[bx by] (center ball)
@@ -115,49 +125,16 @@
         [p2x] (center p2)]
     (cond
       (<= bx p1x)
-        (bounce-x ball p1 :right)
+        (bounce ball :right p1)
       (>= bx p2x)
-        (bounce-x ball p2 :left)
+        (bounce ball :left p2)
       (<= by 0)
-        (bounce-y ball :up)
+        (bounce ball :down)
       (>= by (:height *world*))
-        (bounce-y ball :down)
+        (bounce ball :up)
       :default ball)))
 
-;;; Records and Protocols
-
-(defn abstract-draw [{:keys [width height x y] :as thing} context]
-  (do (draw-rect context "#fff" x y width height) thing))
-
-(defn abstract-center [{:keys [x y width height] :as this}]
-  [(+ x (/ width 2))
-   (+ y (/ height 2))
-   this])
-
-(defrecord World [width height color]
-  Thing
-  (draw [this context]
-    (do (draw-rect context color 0 0 width height)
-        this))
-  (update [this dt] this)
-  (center [this]
-    [(/ width 2)
-     (/ height 2)]))
-
-(defrecord Ball [width height x y vx vy])
-(defrecord Player [width height x y])
-(defrecord AIPlayer [width height x y])
-
-(extend-type Ball
-  Thing
-  (update [{:keys [x y vx vy] :as this} dt]
-    (let [new-x (+ x (* vx (/ dt 1000.0)))
-          new-y (+ y (* vy (/ dt 1000.0))) ]
-      (-> this
-          (assoc :x new-x)
-          (assoc :y new-y))))
-  (center [this] (abstract-center this))
-  (draw [this context] (abstract-draw this context)))
+;;; Player update
 
 (defn move [{y :y :as player} direction]
   (let [f (direction {:up -, :down +})
@@ -167,30 +144,63 @@
       (assoc player :y new-y)
       player)))
 
+;;; Abstract implementations
+
+(defn abstract-draw [{:keys [width height x y] :as thing} context]
+  (do (draw-rect context "#fff" x y width height) thing))
+
+(defn abstract-center [{:keys [x y width height] :as this}]
+  [(+ x (/ width 2))
+   (+ y (/ height 2))
+   this])
+
+;;; Protocol implementations
+
+(extend-type World
+  Thing
+  (draw [{:keys [width height color] :as this} context]
+    (do (draw-rect context color 0 0 width height)
+        this))
+  (update [this dt] this)
+  (center [{:keys [width height] :as this}]
+    [(/ width 2)
+     (/ height 2)]))
+
+(extend-type Ball
+  Thing
+  (draw [this context] (abstract-draw this context))
+  (update [{:keys [x y vx vy] :as this} dt]
+    (let [new-x (+ x (* vx (/ dt 1000.0)))
+          new-y (+ y (* vy (/ dt 1000.0)))]
+      (-> this
+          (assoc :x new-x)
+          (assoc :y new-y))))
+  (center [this] (abstract-center this)))
+
 (extend-type Player
   Thing
+  (draw [this context] (abstract-draw this context))
   (update [this dt]
     (-> this
         (#(cond (:up @key-state)   (move % :up)
                 (:down @key-state) (move % :down)
                 :default %))))
-  (center [this] (abstract-center this))
-  (draw [this context] (abstract-draw this context)))
+  (center [this] (abstract-center this)))
 
 (extend-type AIPlayer
   Thing
+  (draw [this context] (abstract-draw this context))
   (update [this dt]
     (-> this
         (#(cond (:w @key-state) (move % :up)
                 (:d @key-state) (move % :down)
                 :default %))))
-  (center [this] (abstract-center this))
-  (draw [this context] (abstract-draw this context)))
+  (center [this] (abstract-center this)))
 
 (defrecord Game [things context]
   Thing
   (draw [this _]
-    (assoc this :things (doall (map #(draw % context) things))))
+    (assoc this :things (into [] (doall (map #(draw % context) things)))))
   (update [this dt]
     (-> this
         (assoc-in [:things 1] (update-ball things))
@@ -201,7 +211,7 @@
   Thing
   (draw [this context]
     (let [text (str (first @score) " - " (second @score))]
-     (draw-text context color font text x y)))
+      (do (draw-text context color font text x y) this)))
   (update [this _]
     this)
   (center [this]
@@ -278,7 +288,7 @@
 
         world (map->World *world*)
 
-        [vx vy] (random-velocity 200)
+        [vx vy] (random-velocity 400)
         [xc yc] (center world)
         yoffset (- yc (/ player-height 2))
 

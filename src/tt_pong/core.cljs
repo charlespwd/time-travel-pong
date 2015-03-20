@@ -3,22 +3,28 @@
   (:require [goog.dom :as dom]
             [goog.events :as events]))
 
-(def ^:dynamic *world* {:width 600, :height 400, :color "#333"})
-(def max-bounce-angle (* (.-PI js/Math) 0.41)) ;; ~~ 75degrees
-(def player-width 20)
-(def player-height 100)
-(def ball-size 20)
-
 (declare restart stop setup)
 
-(def app-state (atom {}))
-(def app-history (atom [@app-state]))
-(def animation-frame (atom {}))
-(def score (atom [0 0]))
+(def ^:dynamic *world* {:width 600, :height 400, :color "#333"})
+(def ball-size 20) ; px
+(def controls {32 :space, 38 :up, 40 :down, 87 :w, 83 :d}) ; map key code to keyword
+(def difficulty 300) ; px/s
+(def max-bounce-angle (* (.-PI js/Math) 0.41)) ; ~ 75º
+(def move-dy-player 7) ; px
+(def move-dy-ai (/ difficulty 100))
+(def player-height 100)
+(def player-width 20)
+
+;; Global state
+
+(def game-state (atom {}))
+(def game-history (atom [@game-state]))
+(def app-state (atom {:score [0 0] :rafid nil :key-pressed {}}))
+(def key-state (atom {}))
 
 (defn restart []
-  (do (reset! app-state {})
-      (reset! app-history [@app-state])
+  (do (reset! game-state {})
+      (reset! game-history [@game-state])
       (stop)
       (setup)))
 
@@ -47,16 +53,12 @@
       (.fillText context text x y)))
 
 (defn update-rafid! [rafid]
-  (swap! animation-frame assoc :rafid rafid))
+  (swap! app-state assoc :rafid rafid))
 
 (defn request-animation-frame! [f & args]
   (update-rafid! (start-animation (apply partial f args))))
 
 ;;; Keyboard Controls
-
-(def controls {32 :space, 38 :up, 40 :down, 87 :w, 83 :d})
-(def nudge 10) ;; by how many pixels does the player move when pressing a key?
-(def key-state (atom {}))
 
 (defn set-key-state-to! [bool]
   (fn [e]
@@ -138,15 +140,15 @@
 
 ;;; Player update
 
-(defn move [{y :y :as player} direction]
-  (let [f (direction {:up -, :down +})
-        [_ yc] (center player)
-        [new-y new-yc] (map #(f % nudge) [y yc])]
-    (if (< 0 new-yc (:height *world*))
-      (-> player
-          (assoc :py y)
-          (assoc :y new-y))
-      player)))
+(defn move [{y :y :as player} direction dy]
+   (let [f (direction {:up -, :down +})
+         [_ yc] (center player)
+         [new-y new-yc] (map #(f % dy) [y yc])]
+     (if (< 0 new-yc (:height *world*))
+       (-> player
+           (assoc :py y)
+           (assoc :y new-y))
+       player)))
 
 ;;; Abstract implementations
 
@@ -193,8 +195,8 @@
   (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
     (-> this
-        (#(cond (:up @key-state)   (move % :up)
-                (:down @key-state) (move % :down)
+        (#(cond (:up @key-state)   (move % :up move-dy-player)
+                (:down @key-state) (move % :down move-dy-player)
                 :default (assoc % :py (:y %))))))
   (center [this] (abstract-center this)))
 
@@ -202,10 +204,14 @@
   Thing
   (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
-    (-> this
-        (#(cond (:w @key-state) (move % :up)
-                (:d @key-state) (move % :down)
-                :default (assoc % :py (:y %))))))
+    (let [[_ ball] (:things @game-state)
+          [_ by] (center ball)
+          [_ py] (center this)
+          bvx (:vx ball)]
+      (-> this
+        (#(cond (> py by) (move % :up   (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
+                (< py by) (move % :down (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
+                :default (assoc % :py (:y %)))))))
   (center [this] (abstract-center this)))
 
 (defrecord Game [things context]
@@ -221,7 +227,8 @@
 (defrecord Score [x y color font]
   Thing
   (draw [this context _]
-    (let [text (str (first @score) " - " (second @score))]
+    (let [score (:score @app-state)
+          text (str (first score) " - " (second score))]
       (do (draw-text context color font text x y) this)))
   (update [this _]
     this)
@@ -242,12 +249,12 @@
 ;; For more info, check
 ;; http://kirbysayshi.com/2013/09/24/interpolated-physics-rendering.html
 
-(defn simulate-with [game update-fn dt]
-  (let [target-dt 16.66666666]
+(defn simulate-with [{:keys [remainder] :or {remainder 0} :as game} update-fn dt]
+  (let [target-dt 16.66666666] ; 60 fps
     (loop [simulation (update-fn game dt)
-           accumulator dt]
+           accumulator (+ dt remainder)] ; carry the remainder
       (if (< accumulator target-dt)
-        [simulation (/ accumulator target-dt)]
+        [(assoc simulation :remainder accumulator) (/ accumulator target-dt)]
         (recur (update-fn simulation target-dt) (- accumulator target-dt))))))
 
 (defn simulate-and-draw-with [game update-fn dt]
@@ -263,25 +270,24 @@
   (let [[bx]        (center ball)
          p1-scored? (neg? (- (:width *world*) bx))
          index      (if p1-scored? 0 1)]
-    (swap! score update-in [index] inc)))
+    (swap! app-state update-in [:score index] inc)))
 
 (defn score! [game]
-  (do (update-score! game) (restart)))
+  (do (update-score! game)
+      (restart)))
 
-(defn update-app-state! [game]
-  (do (swap! app-history conj game)
-      (reset! app-state game)
-      game))
-
-(defn update! [game dt]
-  (update-app-state! (update game dt)))
+(defn update! [old-game dt]
+  (let [game (update old-game dt)]
+    (do (swap! game-history conj game)
+        (reset! game-state game)
+        game)))
 
 (defn undo! [game dt]
-  (if (> (count @app-history) 2)
-    (do (swap! app-history pop)
-        (reset! app-state (last @app-history))
-        @app-state)
-    @app-state))
+  (if (> (count @game-history) 2)
+    (do (swap! game-history pop)
+        (reset! game-state (last @game-history))
+        @game-state)
+    @game-state))
 
 ;;; Animations
 
@@ -304,18 +310,18 @@
 
 (defn start []
   (do (stop)
-      (draw @app-state nil 0)
-      (start-animation (partial play! @app-state nil))))
+      (draw @game-state nil 0)
+      (start-animation (partial play! @game-state nil))))
 
 (defn stop []
-  (stop-animation (:rafid @animation-frame)))
+  (stop-animation (:rafid @app-state)))
 
 (defn setup []
   (let [context (get-context "game")
 
         world (map->World *world*)
 
-        [vx vy] (random-velocity 400)
+        [vx vy] (random-velocity difficulty)
         [xc yc] (center world)
         yoffset (- yc (/ player-height 2))
 
@@ -336,12 +342,7 @@
                               :px 570, :py yoffset})
 
         gamescore (->Score (- 300 60) 50 "#fff" "40px Courier")]
-    (do (reset! app-state (->Game [world ball player1 player2 gamescore] context))
+    (do (reset! game-state (->Game [world ball player1 player2 gamescore] context))
         (timeout #(start) 500))))
 
-(set! (.-onload js/window) setup)
-
-;; #_(timeout #(stop) 3000)
-;; #_(timeout #(start) 6000)
-;; #_(timeout #(restart) 4000)
-;; #_(timeout #(start) 10000)
+(events/listen (dom/getWindow) "load" setup)

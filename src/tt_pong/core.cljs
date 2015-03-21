@@ -162,7 +162,8 @@
     ;; interpolate the location
     (let [ix (+ (* ratio x) (* (- 1 ratio) px))
           iy (+ (* ratio y) (* (- 1 ratio) py))]
-      (do (draw-rect context "#fff" ix iy width height) thing))
+      (draw-rect context "#fff" ix iy width height)
+      this)
     (do (draw-rect context "#fff" x y width height) thing)))
 
 (defn- abstract-center [{:keys [x y width height] :as this}]
@@ -196,10 +197,9 @@
   Thing
   (draw [this context ratio] (abstract-draw this context ratio))
   (update [this dt]
-    (-> this
-        (#(cond (key-is-pressed? :up)   (move % :up move-dy-player)
-                (key-is-pressed? :down) (move % :down move-dy-player)
-                :default (assoc % :py (:y %))))))
+    (cond (key-is-pressed? :up)   (move this :up move-dy-player)
+          (key-is-pressed? :down) (move this :down move-dy-player)
+          :default (assoc this :py (:y this))))
   (center [this] (abstract-center this)))
 
 (extend-type AIPlayer
@@ -210,28 +210,28 @@
           [_ by] (center ball)
           [_ py] (center this)
           bvx (:vx ball)]
-      (-> this
-        (#(cond (> py by) (move % :up   (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
-                (< py by) (move % :down (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
-                :default (assoc % :py (:y %)))))))
+      (cond (> py by) (move this :up   (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
+            (< py by) (move this :down (if (> 0 bvx) move-dy-ai (/ move-dy-ai 3)))
+            :default (assoc this :py (:y this)))))
   (center [this] (abstract-center this)))
 
 (defrecord Game [things context]
   Thing
   (draw [this _ ratio]
-    (assoc this :things (into [] (doall (map #(draw % context ratio) things)))))
+    (assoc this :things (vec (doall (map #(draw % context ratio) things)))))
   (update [this dt]
     (-> this
         (assoc-in [:things 1] (update-ball things))
         (update-in [:things]
-                   #(into [] (doall (map (fn [t] (update t dt)) %)))))))
+                   #(vec (doall (map (fn [t] (update t dt)) %)))))))
 
 (defrecord Score [x y color font]
   Thing
   (draw [this context _]
     (let [score (:score @app-state)
           text (str (first score) " - " (second score))]
-      (do (draw-text context color font text x y) this)))
+      (draw-text context color font text x y)
+      this))
   (update [this _] this)
   (center [this] [x y]))
 
@@ -349,7 +349,7 @@
                               :px 570, :py yoffset})
 
         gamescore (->Score (- 300 60) 50 "#fff" "40px Courier")]
-    (do (reset! game-state (->Game [world ball player1 player2 gamescore] context))
-        (timeout #(start) 500))))
+    (reset! game-state (->Game [world ball player1 player2 gamescore] context))
+    (timeout start 500)))
 
 (events/listen (dom/getWindow) "load" setup)

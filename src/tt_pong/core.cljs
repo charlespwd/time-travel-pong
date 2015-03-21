@@ -5,22 +5,28 @@
 
 (declare restart stop setup)
 
-(def ^:dynamic *world* {:width 600, :height 400, :color "#333"})
-(def ball-size 20) ; px
-(def controls {32 :space, 38 :up, 40 :down, 87 :w, 83 :d}) ; map key code to keyword
-(def difficulty 300) ; px/s
-(def max-bounce-angle (* (.-PI js/Math) 0.41)) ; ~ 75º
-(def move-dy-player 7) ; px
-(def move-dy-ai (/ difficulty 100))
-(def player-height 100)
-(def player-width 20)
+(def ^:private controls
+  {32 :space, 38 :up, 40 :down}) ; key code to keyword
+
+(def pi (.-PI js/Math))
+(def ball-size 20)                  ; px
+(def difficulty 400)                ; px/s
+(def max-bounce-angle (* pi 0.41))  ; ~ 75º
+(def move-dy-ai (/ difficulty 100)) ; px
+(def move-dy-player 7)              ; px
+(def player-height 100)             ; px
+(def player-width 20)               ; px
+(def world-color "#333")            ; hex
+(def world-height 400)              ; px
+(def world-width 600)               ; px
 
 ;; Global state
 
-(def game-state (atom {}))
-(def game-history (atom [@game-state]))
-(def app-state (atom {:score [0 0] :rafid nil :keys-pressed {}}))
-(defn key-is-pressed? [k]
+(def ^:private game-state (atom {}))
+(def ^:private game-history (atom [@game-state]))
+(def ^:private app-state (atom {:score [0 0] :rafid nil :keys-pressed {}}))
+
+(defn- key-is-pressed? [k]
   (get-in @app-state [:keys-pressed k]))
 
 (defn restart []
@@ -31,42 +37,37 @@
 
 ;;; Javascript abstractions
 
-(def abs (.-abs js/Math))
-(def cos (.-cos js/Math))
-(def log #(.log js/console %))
-(def pi (.-PI js/Math))
-(def sin (.-sin js/Math))
-(def sqrt (.-sqrt js/Math))
-(def start-animation (.-requestAnimationFrame js/window))
-(def stop-animation (.-cancelAnimationFrame js/window))
-(def timeout js/setTimeout)
+(def ^:private abs (.-abs js/Math))
+(def ^:private cos (.-cos js/Math))
+(def ^:private log #(.log js/console %))
+(def ^:private sin (.-sin js/Math))
+(def ^:private sqrt (.-sqrt js/Math))
+(def ^:private start-animation (.-requestAnimationFrame js/window))
+(def ^:private stop-animation (.-cancelAnimationFrame js/window))
+(def ^:private timeout js/setTimeout)
 
-(defn get-context [id]
+(defn- get-context [id]
   (.getContext (dom/getElement id) "2d"))
 
-(defn draw-rect [context color x y width height]
+(defn- draw-rect [context color x y width height]
   (do (set! (.-fillStyle context) color)
       (.fillRect context x y width height)))
 
-(defn draw-text [context color font text x y]
+(defn- draw-text [context color font text x y]
   (do (set! (.-fillStyle context) color)
       (set! (.-font context) font)
       (.fillText context text x y)))
 
-(defn update-rafid! [rafid]
-  (swap! app-state assoc :rafid rafid))
-
-(defn request-animation-frame! [f & args]
-  (update-rafid! (start-animation (apply partial f args))))
+(defn- request-animation-frame!
+  "Request for an animation frame and save the ID."
+  [f & args]
+  (swap! app-state assoc :rafid (start-animation (apply partial f args))))
 
 ;;; Keyboard Controls
 
-(defn keycode->keypress [keycode]
-  (get controls keycode nil))
-
-(defn set-key-state-to! [bool]
+(defn- set-key-state-to! [bool]
   (fn [e]
-    (when-let [key (keycode->keypress (.-keyCode e))]
+    (when-let [key (get controls (.-keyCode e) nil)]
       (.preventDefault e)
       (swap! app-state assoc-in [:keys-pressed key] bool))))
 
@@ -92,15 +93,15 @@
 
 ;;; Ball Logic
 
-(defn random-velocity [speed]
+(defn- random-velocity [speed]
   (let [theta (rand (* 2 pi))]
     [(* speed (cos theta))
      (* speed (sin theta))]))
 
-(defn speed [{:keys [vx vy]}]
+(defn- speed [{:keys [vx vy]}]
   (sqrt (+ (* vx vx) (* vy vy))))
 
-(defn bounce
+(defn- bounce
   ;; 2 arity for bouncing on the world boundary
   ([{:keys [vy y] :as ball} direction]
    (let [dir (direction {:up -1, :down 1})]
@@ -127,7 +128,7 @@
            (assoc :x (+ x dir)))
        ball))))
 
-(defn update-ball [[world ball p1 p2 :as things]]
+(defn- update-ball [[world ball p1 p2 :as things]]
   (let [[bx by] (center ball)
         [p1x] (center p1)
         [p2x] (center p2)]
@@ -138,17 +139,17 @@
         (bounce ball :left p2)
       (<= by 0)
         (bounce ball :down)
-      (>= by (:height *world*))
+      (>= by world-height)
         (bounce ball :up)
       :default ball)))
 
 ;;; Player update
 
-(defn move [{y :y :as player} direction dy]
+(defn- move [{y :y :as player} direction dy]
    (let [f (direction {:up -, :down +})
          [_ yc] (center player)
          [new-y new-yc] (map #(f % dy) [y yc])]
-     (if (< 0 new-yc (:height *world*))
+     (if (< 0 new-yc world-height)
        (-> player
            (assoc :py y)
            (assoc :y new-y))
@@ -156,7 +157,7 @@
 
 ;;; Abstract implementations
 
-(defn abstract-draw [{:keys [width height x y px py] :as thing} context ratio]
+(defn- abstract-draw [{:keys [width height x y px py] :as thing} context ratio]
   (if (and px ratio)
     ;; interpolate the location
     (let [ix (+ (* ratio x) (* (- 1 ratio) px))
@@ -164,7 +165,7 @@
       (do (draw-rect context "#fff" ix iy width height) thing))
     (do (draw-rect context "#fff" x y width height) thing)))
 
-(defn abstract-center [{:keys [x y width height] :as this}]
+(defn- abstract-center [{:keys [x y width height] :as this}]
   (map (fn [[a b]] (+ a (/ b 2))) [[x width] [y height]]))
 
 ;;; Protocol implementations
@@ -234,6 +235,38 @@
   (update [this _] this)
   (center [this] [x y]))
 
+;;; Score logic
+
+(defn- score? [{[_ ball] :things}]
+  (let [[bx] (center ball)]
+    (not (< 0 bx world-width))))
+
+(defn- score! [{[_ ball] :things}]
+  (let [[bx]        (center ball)
+         p1-scored? (neg? (- world-width bx))
+         index      (if p1-scored? 0 1)]
+    (swap! app-state update-in [:score index] inc)))
+
+;;; Time Travel Logic
+
+(add-watch game-state :history
+  (fn [_ _ _ new-state]
+    (when-not (= (last @game-history) new-state)
+      (swap! game-history conj new-state))))
+
+(defn- update!
+  "Atomically update the state of the game."
+  [old-game dt]
+  (reset! game-state (update old-game dt)))
+
+(defn- undo!
+  "Atomically undo the state of the game."
+  [old-game dt]
+  (if (> (count @game-history) 2)
+    (do (swap! game-history pop)
+        (reset! game-state (last @game-history)))
+    old-game))
+
 ;;; Game flow helpers
 
 ;; This here is a bit heavy. Please take a look into time accumulators
@@ -248,7 +281,7 @@
 ;; For more info, check
 ;; http://kirbysayshi.com/2013/09/24/interpolated-physics-rendering.html
 
-(defn simulate-with [{:keys [remainder] :or {remainder 0} :as game} update-fn dt]
+(defn- simulate-with [{:keys [remainder] :or {remainder 0} :as game} update-fn dt]
   (let [target-dt 16.66666666] ; 60 fps
     (loop [simulation (update-fn game dt)
            accumulator (+ dt remainder)] ; carry the remainder
@@ -256,51 +289,24 @@
         [(assoc simulation :remainder accumulator) (/ accumulator target-dt)]
         (recur (update-fn simulation target-dt) (- accumulator target-dt))))))
 
-(defn simulate-and-draw-with [game update-fn dt]
+(defn- simulate-and-draw-with [game update-fn dt]
   (-> game
       (simulate-with update-fn dt)
       (#(draw (first %) nil (second %)))))
 
-(defn score? [{[_ ball] :things}]
-  (let [[bx] (center ball)]
-    (not (< 0 bx (:width *world*)))))
-
-(defn update-score! [{[_ ball] :things}]
-  (let [[bx]        (center ball)
-         p1-scored? (neg? (- (:width *world*) bx))
-         index      (if p1-scored? 0 1)]
-    (swap! app-state update-in [:score index] inc)))
-
-(defn score! [game]
-  (do (update-score! game)
-      (restart)))
-
-(defn update! [old-game dt]
-  (let [game (update old-game dt)]
-    (do (swap! game-history conj game)
-        (reset! game-state game)
-        game)))
-
-(defn undo! [game dt]
-  (if (> (count @game-history) 2)
-    (do (swap! game-history pop)
-        (reset! game-state (last @game-history))
-        @game-state)
-    @game-state))
-
 ;;; Animations
 
-(defn is-asking-for-rewind? []
+(defn- is-asking-for-rewind? []
   (key-is-pressed? :space))
 
-(defn play! [game t1 t2]
+(defn- play! [game t1 t2]
   (let [dt (- t2 (or t1 t2))]
     (if-not (is-asking-for-rewind?)
       (-> game
           (simulate-and-draw-with update! dt)
           (#(if-not (score? %)
               (request-animation-frame! play! % t2)
-              (score! %))))
+              (do (score! %) (restart)))))
       (-> game
           (simulate-and-draw-with undo! dt)
           (#(request-animation-frame! play! % t2))))))
@@ -318,7 +324,9 @@
 (defn setup []
   (let [context (get-context "game")
 
-        world (map->World *world*)
+        world (map->World {:width world-width
+                           :height world-height
+                           :color world-color})
 
         [vx vy] (random-velocity difficulty)
         [xc yc] (center world)

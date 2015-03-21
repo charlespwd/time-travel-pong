@@ -14,6 +14,7 @@
 (def max-bounce-angle (* pi 0.41))  ; ~ 75º
 (def move-dy-ai (/ difficulty 100)) ; px
 (def move-dy-player 7)              ; px
+(def player-offset 35)              ; px
 (def player-height 100)             ; px
 (def player-width 20)               ; px
 (def world-color "#333")            ; hex
@@ -94,8 +95,8 @@
 ;;; Ball Logic
 
 (defn- random-velocity [speed]
-  (let [theta (rand (* 2 pi))]
-    [(* speed (cos theta))
+  (let [theta (* (- (rand (* 0.75 pi)) (* 0.375 pi)))]
+    [(* speed (cos theta) (rand-nth [-1 1]))
      (* speed (sin theta))]))
 
 (defn- speed [{:keys [vx vy]}]
@@ -163,7 +164,7 @@
     (let [ix (+ (* ratio x) (* (- 1 ratio) px))
           iy (+ (* ratio y) (* (- 1 ratio) py))]
       (draw-rect context "#fff" ix iy width height)
-      this)
+      thing)
     (do (draw-rect context "#fff" x y width height) thing)))
 
 (defn- abstract-center [{:keys [x y width height] :as this}]
@@ -331,6 +332,8 @@
         [vx vy] (random-velocity difficulty)
         [xc yc] (center world)
         yoffset (- yc (/ player-height 2))
+        xai player-offset
+        xp  (- world-width player-width xai)
 
         ball (map->Ball {:width  ball-size
                          :height ball-size
@@ -340,13 +343,13 @@
 
         player1 (map->AIPlayer {:width  player-width
                                 :height player-height
-                                :x  10, :y  yoffset
-                                :px 10, :py yoffset})
+                                :x  xai, :y  yoffset
+                                :px xai, :py yoffset})
 
         player2 (map->Player {:width  player-width
                               :height player-height
-                              :x  570, :y  yoffset
-                              :px 570, :py yoffset})
+                              :x  xp, :y  yoffset
+                              :px xp, :py yoffset})
 
         gamescore (->Score (- 300 60) 50 "#fff" "40px Courier")]
     (reset! game-state (->Game [world ball player1 player2 gamescore] context))

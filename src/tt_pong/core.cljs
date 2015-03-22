@@ -284,7 +284,7 @@
 
 (defn- simulate-with [{:keys [remainder] :or {remainder 0} :as game} update-fn dt]
   (let [target-dt 16.66666666] ; 60 fps
-    (loop [simulation (update-fn game dt)
+    (loop [simulation (update-fn game target-dt)
            accumulator (+ dt remainder)] ; carry the remainder
       (if (< accumulator target-dt)
         [(assoc simulation :remainder accumulator) (/ accumulator target-dt)]
